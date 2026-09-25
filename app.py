@@ -27,7 +27,7 @@ from queries import (
     CLIENT_LOOKUP_QUERY,
     FIELD_NAME_LOOKUP_QUERY,
 )
-from outlook_email import outlook_available, send_via_outlook
+from email_sender import email_available, send_email
 from report_excel import (
     MAX_SPLIT_GROUPS,
     TooManySplitGroupsError,
@@ -234,8 +234,8 @@ def _render_group_split_download(
     columns: list[str],
 ) -> None:
     """One 'Generate' button that builds a split-by-`group_column` zip into
-    `session_key`, a download button once it's built, and an email-via-Outlook
-    sub-section keyed on a user-uploaded To/CC mapping file. Split on demand
+    `session_key`, a download button once it's built, and an email sub-section
+    keyed on a user-uploaded To/CC mapping file. Split on demand
     rather than automatically since some columns (e.g. a free-text antecedent
     field) can have far too many distinct values to split by.
 
@@ -262,7 +262,7 @@ def _render_group_split_download(
                 key=f"dl_{session_key}",
             )
 
-    with st.expander(f"📧 Email split-by-{label} files via Outlook", expanded=True):
+    with st.expander(f"📧 Email split-by-{label} files", expanded=True):
         if group_column not in df.columns:
             st.caption("This column isn't in the current report.")
             return
@@ -274,10 +274,10 @@ def _render_group_split_download(
             )
             return
 
-        if not outlook_available():
+        if not email_available():
             st.warning(
-                "Outlook automation (pywin32) isn't available in this environment, "
-                "so emailing is disabled here."
+                "Email sending isn't configured (SMTP_HOST/EMAIL_SENDER/EMAIL_PASSWORD "
+                "missing from .env), so emailing is disabled here."
             )
             return
 
@@ -332,7 +332,7 @@ def _render_group_split_download(
         )
 
         if st.button(
-            f"📧 Send {len(sendable)} email(s) via Outlook",
+            f"📧 Send {len(sendable)} email(s)",
             key=f"{session_key}_send",
             disabled=sendable.empty,
         ):
@@ -351,7 +351,7 @@ def _render_group_split_download(
                     file_name = sanitize_filename(display_value, set(), max_len=150, fallback="Report") + ".xlsx"
                     subject = subject_template.replace("{value}", display_value)
                     body = body_template.replace("{value}", display_value)
-                    send_via_outlook(row["To_address"], row["CC_address"], subject, body, attachment_bytes, file_name)
+                    send_email(row["To_address"], row["CC_address"], subject, body, attachment_bytes, file_name)
                     results.append({dimension_label: display_value, "To_address": row["To_address"], "Status": "Sent"})
                 except Exception as exc:
                     results.append({dimension_label: display_value, "To_address": row["To_address"], "Status": f"Failed - {exc}"})
@@ -529,10 +529,10 @@ def render_saved_trackers_view() -> None:
                     if send_now_clicked:
                         if not email_to.strip():
                             st.error("Enter a To_address before sending.")
-                        elif not outlook_available():
+                        elif not email_available():
                             st.warning(
-                                "Outlook automation (pywin32) isn't available in this environment, "
-                                "so emailing is disabled here."
+                                "Email sending isn't configured (SMTP_HOST/EMAIL_SENDER/EMAIL_PASSWORD "
+                                "missing from .env), so emailing is disabled here."
                             )
                         else:
                             try:
@@ -546,7 +546,7 @@ def render_saved_trackers_view() -> None:
                                     )
                                     subject = f"Case Report - {row['tracker_name']} - {date.today():%Y-%m-%d}"
                                     body = f"Please find attached the '{row['tracker_name']}' report."
-                                    send_via_outlook(
+                                    send_email(
                                         email_to.strip(), email_cc.strip(), subject, body, file_bytes, file_name
                                     )
                                 st.success(f"✅ Sent to {email_to.strip()}.")

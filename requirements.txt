@@ -5,4 +5,3 @@ SQLAlchemy
 PyMySQL
 python-dotenv
 openpyxl
-pywin32; sys_platform == "win32"

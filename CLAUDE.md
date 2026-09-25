@@ -9,7 +9,7 @@ A Streamlit app (`app.py`) that queries a production MySQL database (`checkpoint
 - Filterable fetch (date range, client, check name, case/check status, check severity).
 - A drag-and-drop column picker with pivot-table-style aggregation (hide a column that distinguishes rows → those rows collapse into one).
 - Optional per-check "antecedent field" enrichment (`ec_case_check_data`), added as extra columns without bloating the main query.
-- Several "split into one file per X" downloads (client, Process Name, Location, a Case Flex Field, an antecedent field), each with an optional Outlook-based bulk-email flow.
+- Several "split into one file per X" downloads (client, Process Name, Location, a Case Flex Field, an antecedent field), each with an optional SMTP-based bulk-email flow.
 - A **Saved Trackers** view: named, reusable filter presets stored in a local SQLite file, with Edit / Email / Download / Active-Inactive actions.
 
 There is no build step and no test suite — everything is plain Python files run directly by Streamlit.
@@ -21,7 +21,7 @@ pip install -r requirements.txt
 streamlit run app.py              # default port 8501; pass --server.port N if it's taken
 ```
 
-No linter, formatter, or test suite is configured in this repo. `pywin32` (Windows-only, guarded by `sys_platform == "win32"` in requirements.txt) is needed for the Outlook email feature — see below.
+No linter, formatter, or test suite is configured in this repo. Emailing split files needs `SMTP_HOST`/`SMTP_PORT`/`EMAIL_SENDER`/`EMAIL_PASSWORD` set in `.env` — see below.
 
 ## Architecture
 
@@ -45,7 +45,7 @@ Streamlit re-runs `app.py` top-to-bottom on every widget interaction — there i
   - `build_mapping_template_excel(dimension_label, values)` — the downloadable starter file for a split's email mapping upload (one row per distinct value, blank `To_address`/`CC_address` columns).
   - `sanitize_filename(name, used, max_len, fallback=...)` — public (not `_`-prefixed) since it's reused outside this module for antecedent-field email attachment names.
 - **`flex_fields.py`** — `load_flex_field_map()` reads `ec_client_case_fields` and returns `{client_external_id: {field_index: field_name}}`, resolving multiple rows per field index by keeping the highest `client_field_id` (most recent). `flex_column_rename_map()` turns that into a per-client `{"CASE_FLEX_FIELDn": "Real Name"}` rename dict, falling back to `"Flex Field n"` for indices the client has no mapping for. Only used by the split-by-client path.
-- **`outlook_email.py`** — Outlook desktop COM automation via `pywin32`, used for all "email a split file" flows. No SMTP — `send_via_outlook(...)` is the only function that talks to Outlook, so swapping to SMTP later means replacing this module's internals, not its callers. `outlook_available()` does a lazy `import win32com.client` so the module still imports cleanly on non-Windows machines or without `pywin32` installed; the UI checks it and disables emailing instead of crashing. Attachments are written to a private temp directory first (Outlook's COM API needs a real file path, not in-memory bytes) and cleaned up after send, success or failure.
+- **`email_sender.py`** — SMTP email sending (via `smtplib`) used for all "email a split file" flows. `send_email(...)` is the only function that actually sends, so callers in `app.py`/`scheduled_tracker_runner.py` don't know or care how the email goes out. Credentials come from `.env` (`SMTP_HOST`, `SMTP_PORT`, `EMAIL_SENDER`, `EMAIL_PASSWORD`); `email_available()` checks those are set so the UI can disable emailing instead of crashing when they're missing. This replaced an earlier Outlook-desktop-COM-automation (`pywin32`) implementation — if you see `outlook_email.py`, `outlook_available()`, or `send_via_outlook(...)` referenced anywhere (docs, old branches), that's stale.
 - **`tracker_store.py`** — local SQLite persistence (`trackers.db`, created next to the app) for Saved Trackers. **Deliberately not the MySQL DB** — that database is read-only everywhere else in this app, and adding a table/write path there would be a much bigger, harder-to-reverse change than this feature needed; ask before changing that decision. `save_tracker(config, tracker_id=None)` inserts when `tracker_id` is `None`, updates otherwise, and always returns the row's id — callers must capture that return value back into session state or a second save duplicates instead of updating. A tracker's date range is stored as `lookback_days` (rolling window resolved against *today* at run time), not frozen From/To dates, so a tracker saved once and reused months later still pulls fresh, relevant data instead of replaying a range that's aged out. `current_user()` (OS login username via `getpass.getuser()`) stands in for "Modified By" — this app has no login system of its own.
 
 ### Key schema concept: two different "check name" columns

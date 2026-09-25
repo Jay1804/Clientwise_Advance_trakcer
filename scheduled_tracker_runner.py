@@ -10,10 +10,7 @@ This script does not register that task itself; wire it up separately, e.g.:
         /TR "C:\\path\\to\\python.exe C:\\Gen AI\\AdvanceTracker_Client\\scheduled_tracker_runner.py" ^
         /RL LIMITED
 
-Two important constraints on when this can actually work:
-- It relies on Outlook COM automation (see outlook_email.py), which needs a
-  logged-in Windows session with Outlook configured - it cannot run as a
-  headless/locked-screen background service.
+One important constraint on when this can actually work:
 - A tracker is only ever sent once per scheduled day: `last_scheduled_run`
   is checked against "today" before sending, so re-running this script more
   often than the schedule's granularity is safe (it won't double-send), but
@@ -27,7 +24,7 @@ import sys
 from datetime import datetime
 
 import tracker_store as trackers
-from outlook_email import outlook_available, send_via_outlook
+from email_sender import email_available, send_email
 from report_excel import build_report_excel
 from report_runner import run_tracker_query
 
@@ -72,8 +69,8 @@ def _is_due(row, now: datetime) -> bool:
 def run_once() -> int:
     """Runs one pass. Returns the number of emails actually sent (for the
     caller/tests; the CLI entry point below just prints progress)."""
-    if not outlook_available():
-        print("Outlook automation (pywin32) isn't available in this environment - nothing to do.")
+    if not email_available():
+        print("Email sending isn't configured (SMTP_HOST/EMAIL_SENDER/EMAIL_PASSWORD missing from .env) - nothing to do.")
         return 0
 
     now = datetime.now()
@@ -95,7 +92,7 @@ def run_once() -> int:
             file_name = f"{row['tracker_name']}_{now:%Y%m%d}.xlsx"
             subject = f"Case Report - {row['tracker_name']} - {now:%Y-%m-%d}"
             body = f"Please find attached the scheduled '{row['tracker_name']}' report."
-            send_via_outlook(row["to_address"], row["cc_address"], subject, body, file_bytes, file_name)
+            send_email(row["to_address"], row["cc_address"], subject, body, file_bytes, file_name)
             trackers.mark_scheduled_run(tracker_id, now)
             sent += 1
             print(f"[sent] '{row['tracker_name']}' (#{tracker_id}) -> {row['to_address']}")
