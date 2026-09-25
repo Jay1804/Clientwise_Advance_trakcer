@@ -1,0 +1,25 @@
+# Secrets / environment
+.env
+
+# Local SQLite store for Saved Trackers (runtime state, not source)
+trackers.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Playwright test artifacts (screenshots/snapshots from manual QA)
+.playwright-mcp/
+
+# Editor/OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
