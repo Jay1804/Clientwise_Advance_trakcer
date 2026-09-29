@@ -1,0 +1,128 @@
+DEPLOYMENT COMMANDS - copy/paste one step at a time (no Docker, no sudo)
+Values below are for: repo Clientwise_Advance_trakcer, port 8502.
+For another app change the repo URL, folder name and port.
+Server: 10.100.50.238   User: jay.chaudhary
+
+
+1. LOG IN
+---------
+ssh jay.chaudhary@10.100.50.238
+
+
+2. CLONE THE REPO
+-----------------
+mkdir -p ~/apps && cd ~/apps
+git clone https://github.com/Jay1804/Clientwise_Advance_trakcer.git
+cd Clientwise_Advance_trakcer
+
+
+3. INSTALL PYTHON 3.11 (first time on the server only)
+------------------------------------------------------
+/usr/local/bin/python3.8 -m pip install --user -U pip
+/usr/local/bin/python3.8 -m pip install --user uv
+~/.local/bin/uv python install 3.11
+
+
+4. CREATE THE VENV
+------------------
+$(~/.local/bin/uv python find 3.11) -m venv venv
+venv/bin/pip install --upgrade pip
+
+
+5. INSTALL REQUIREMENTS
+-----------------------
+sed 's/^pandas==2.3.3$/pandas==2.3.2/' requirements.txt > /tmp/req_server.txt
+venv/bin/pip install -r /tmp/req_server.txt
+
+
+6. CREATE .env
+--------------
+nano .env
+
+Add these lines, then save: Ctrl+O, Enter, Ctrl+X
+DB_HOST=...
+DB_NAME=...
+DB_USER=...
+DB_PASSWORD=...
+SMTP_HOST=...
+SMTP_PORT=...
+EMAIL_SENDER=...
+EMAIL_PASSWORD=...
+
+Check every key name is spelled fully (values hidden):
+sed -E 's/=.*/=<hidden>/' .env
+
+
+7. TEST RUN
+-----------
+venv/bin/streamlit run app.py --server.port 8502 --server.address 0.0.0.0 --server.headless true
+
+In a second terminal:
+curl http://localhost:8502/_stcore/health        (should print: ok)
+
+Then Ctrl+C in the first terminal.
+
+
+8. CREATE THE AUTO-START SCRIPT
+-------------------------------
+cat > start_app.sh <<EOF
+#!/bin/bash
+D=$PWD
+cd "\$D" || exit 1
+if ! pgrep -f "streamlit run app.py --server.port 8502" > /dev/null; then
+  nohup "\$D/venv/bin/streamlit" run app.py --server.port 8502 --server.address 0.0.0.0 --server.headless true >> "\$D/app.log" 2>&1 < /dev/null &
+fi
+EOF
+chmod +x start_app.sh
+
+
+9. ADD THE CRON JOB (starts at boot + checks every minute)
+----------------------------------------------------------
+( crontab -l 2>/dev/null; echo "@reboot $PWD/start_app.sh"; echo "* * * * * $PWD/start_app.sh" ) | crontab -
+crontab -l
+
+
+10. START IT AND CHECK
+----------------------
+./start_app.sh
+sleep 6
+pgrep -af "streamlit run"
+curl http://localhost:8502/_stcore/health
+
+
+11. OPEN IN THE BROWSER
+-----------------------
+http://10.100.50.238:8502
+
+If the port is blocked, tunnel from your PC (keep the window open),
+then open http://localhost:8502
+ssh -L 8502:localhost:8502 jay.chaudhary@10.100.50.238
+
+
+LATER: UPDATE
+-------------
+cd ~/apps/Clientwise_Advance_trakcer
+git pull
+pkill -f "streamlit run app.py"
+(cron restarts the app within 1 minute)
+
+
+LATER: VIEW LOGS
+----------------
+tail -f ~/apps/Clientwise_Advance_trakcer/app.log
+
+
+LATER: STOP FOR GOOD
+--------------------
+crontab -e
+(delete the two start_app.sh lines first, otherwise cron restarts the app)
+pkill -f "streamlit run app.py"
+
+
+NOTES
+-----
+- Each app needs its own port, and the network team must open that port to the server.
+- The current live app is in ~/advance_tracker/Clientwise_Advance_trakcer (not ~/apps).
+  If you redeploy the same repo/port, remove the old cron lines and stop the old process first,
+  or two copies will fight over port 8502.
+- Delete .env.bak files (they hold passwords) and never put the server password in this file.
