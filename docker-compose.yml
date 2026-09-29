@@ -1,0 +1,11 @@
+services:
+  advancetracker:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - ./trackers.db:/app/trackers.db
+      - ./.cache:/app/.cache
+    restart: unless-stopped

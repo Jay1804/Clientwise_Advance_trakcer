@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+.venv
+venv
+env
+__pycache__
+*.pyc
+*.pyo
+trackers.db
+.cache
+.playwright-mcp
+.streamlit
+Dockerfile
+.dockerignore
+*.md
