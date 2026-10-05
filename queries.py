@@ -45,6 +45,13 @@ AND eclient.client_external_id IN :client_ids
 ORDER BY ec.check_name
 """
 
+PROCESS_NAME_LOOKUP_QUERY = """
+SELECT DISTINCT process_name
+FROM ec_client_process
+WHERE process_name IS NOT NULL AND process_name <> ''
+ORDER BY process_name
+"""
+
 # Options for these lookups are derived with the same translation functions
 # and exclusions CASE_REPORT_QUERY itself uses, so a selected option is
 # guaranteed to match rows the report can actually return. Both dedupe the
@@ -235,6 +242,7 @@ and ecc.check_id<>193
 AND received_date BETWEEN :from_date AND :to_date
 {client_filter_clause}
 {check_name_filter_clause}
+{process_name_filter_clause}
 {case_status_filter_clause}
 {check_status_filter_clause}
 {check_severity_filter_clause}
@@ -291,6 +299,7 @@ CHECK_NAME_FILTER_CLAUSE = "AND ec.check_name IN :check_names"
 # These filter on the same translated expressions CASE_REPORT_QUERY's SELECT
 # list uses for Case_status/check_status, so filter values line up with what
 # the report actually displays for those columns rather than raw DB codes.
+PROCESS_NAME_FILTER_CLAUSE = "AND ecp.process_name IN :process_names"
 CASE_STATUS_FILTER_CLAUSE = "AND checkpoint_live.fn_case_status(case_status) IN :case_statuses"
 CHECK_STATUS_FILTER_CLAUSE = "AND checkpoint_live.fn_check_status(check_status) IN :check_statuses"
 CHECK_SEVERITY_FILTER_CLAUSE = "AND check_severity IN :check_severities"

@@ -1,5 +1,6 @@
 """Streamlit app: Client Wise Case/Check report, downloadable consolidated or split by client."""
 
+import re
 from datetime import date, datetime, time, timedelta
 
 import pandas as pd
@@ -26,6 +27,8 @@ from queries import (
     CLIENT_FILTER_CLAUSE,
     CLIENT_LOOKUP_QUERY,
     FIELD_NAME_LOOKUP_QUERY,
+    PROCESS_NAME_FILTER_CLAUSE,
+    PROCESS_NAME_LOOKUP_QUERY,
 )
 from email_sender import email_available, send_email
 from report_excel import (
@@ -67,6 +70,30 @@ def get_check_name_lookup(client_ids: tuple[int, ...] = ()) -> pd.DataFrame:
     if client_ids:
         return run_query_params(CHECK_NAME_LOOKUP_BY_CLIENT_QUERY, {"client_ids": list(client_ids)})
     return run_query_params(CHECK_NAME_LOOKUP_QUERY)
+
+
+@st.cache_data(ttl=3600)
+def get_process_name_lookup() -> pd.DataFrame:
+    return run_query_params(PROCESS_NAME_LOOKUP_QUERY)
+
+
+def parse_client_ids_text(text: str) -> list[int]:
+    """Comma/whitespace-separated Client External IDs -> ints (order kept, deduped)."""
+    ids: list[int] = []
+    for token in re.split(r"[,\s;]+", text or ""):
+        if token.isdigit() and int(token) not in ids:
+            ids.append(int(token))
+    return ids
+
+
+def read_client_ids_file(uploaded) -> list[int]:
+    """Client External IDs from the 'Client External ID' column of a CSV/XLS(X) upload."""
+    name = uploaded.name.lower()
+    df = pd.read_csv(uploaded, dtype=str) if name.endswith(".csv") else pd.read_excel(uploaded, dtype=str)
+    col = next((c for c in df.columns if str(c).strip().lower() == "client external id"), None)
+    if col is None:
+        raise ValueError('No "Client External ID" column found in the uploaded file.')
+    return parse_client_ids_text(",".join(df[col].dropna().astype(str)))
 
 
 @st.cache_data(ttl=3600)
@@ -592,13 +619,21 @@ if st.session_state.pending_tracker_load is not None:
 
     _valid_labels = [l for l in (_cfg.get("client_labels") or []) if l in label_to_id]
     st.session_state["flt_client_labels"] = _valid_labels
-    _valid_client_ids = [label_to_id[l] for l in _valid_labels]
+    _label_ids = [label_to_id[l] for l in _valid_labels]
+    _extra_ids = [i for i in (_cfg.get("client_ids") or []) if i not in _label_ids]
+    st.session_state["flt_client_ids_text"] = ",".join(str(i) for i in _extra_ids)
+    _valid_client_ids = _label_ids + _extra_ids
 
     _valid_check_names = set(
         get_check_name_lookup(tuple(sorted(_valid_client_ids)))["check_name"].dropna().tolist()
     )
     st.session_state["flt_check_names"] = [
         n for n in (_cfg.get("check_names") or []) if n in _valid_check_names
+    ]
+
+    _valid_process_names = set(get_process_name_lookup()["process_name"].dropna().tolist())
+    st.session_state["flt_process_names"] = [
+        n for n in (_cfg.get("process_names") or []) if n in _valid_process_names
     ]
 
     _valid_case_statuses = set(get_case_status_lookup()["case_status"].dropna().tolist())
@@ -680,12 +715,48 @@ selected_labels = st.multiselect(
 )
 selected_client_ids = [label_to_id[label] for label in selected_labels]
 
+col_ids_text, col_ids_file = st.columns(2)
+with col_ids_text:
+    client_ids_text = st.text_area(
+        "Or enter Client External IDs, comma-separated",
+        placeholder="6583,3067,4861,3026",
+        height=100,
+        key="flt_client_ids_text",
+    )
+with col_ids_file:
+    client_ids_file = st.file_uploader(
+        'Or upload a CSV / Excel file with a "Client External ID" column',
+        type=["csv", "xls", "xlsx"],
+        key="flt_client_ids_file",
+    )
+_extra_client_ids = parse_client_ids_text(client_ids_text)
+if client_ids_file is not None:
+    try:
+        _extra_client_ids += read_client_ids_file(client_ids_file)
+    except Exception as exc:
+        st.error(f"Could not read client IDs from file: {exc}")
+selected_client_ids = list(dict.fromkeys(selected_client_ids + _extra_client_ids))
+_known_ids = set(client_lookup["client_external_id"].astype(int))
+_unknown_ids = [i for i in dict.fromkeys(_extra_client_ids) if i not in _known_ids]
+if _unknown_ids:
+    st.warning(f"Client External ID(s) not found: {', '.join(map(str, _unknown_ids))}")
+if _extra_client_ids:
+    st.caption(f"{len(selected_client_ids)} client(s) selected in total.")
+
 check_name_lookup = get_check_name_lookup(tuple(sorted(selected_client_ids)))
 selected_check_names = st.multiselect(
     "Unique Check Name (leave empty for all check names)",
     options=check_name_lookup["check_name"].dropna().tolist(),
     placeholder="Search by unique check name...",
     key="flt_check_names",
+)
+
+process_name_lookup = get_process_name_lookup()
+selected_process_names = st.multiselect(
+    "Process Name (leave empty for all)",
+    options=process_name_lookup["process_name"].dropna().tolist(),
+    placeholder="Search by process name...",
+    key="flt_process_names",
 )
 
 case_status_lookup = get_case_status_lookup()
@@ -757,12 +828,14 @@ if st.button("📥 Fetch Report", disabled=fetch_disabled, use_container_width=T
         try:
             client_filter_clause = CLIENT_FILTER_CLAUSE if selected_client_ids else ""
             check_name_filter_clause = CHECK_NAME_FILTER_CLAUSE if selected_check_names else ""
+            process_name_filter_clause = PROCESS_NAME_FILTER_CLAUSE if selected_process_names else ""
             case_status_filter_clause = CASE_STATUS_FILTER_CLAUSE if selected_case_statuses else ""
             check_status_filter_clause = CHECK_STATUS_FILTER_CLAUSE if selected_check_statuses else ""
             check_severity_filter_clause = CHECK_SEVERITY_FILTER_CLAUSE if selected_check_severities else ""
             query = CASE_REPORT_QUERY.format(
                 client_filter_clause=client_filter_clause,
                 check_name_filter_clause=check_name_filter_clause,
+                process_name_filter_clause=process_name_filter_clause,
                 case_status_filter_clause=case_status_filter_clause,
                 check_status_filter_clause=check_status_filter_clause,
                 check_severity_filter_clause=check_severity_filter_clause,
@@ -772,6 +845,8 @@ if st.button("📥 Fetch Report", disabled=fetch_disabled, use_container_width=T
                 params["client_ids"] = selected_client_ids
             if selected_check_names:
                 params["check_names"] = selected_check_names
+            if selected_process_names:
+                params["process_names"] = selected_process_names
             if selected_case_statuses:
                 params["case_statuses"] = selected_case_statuses
             if selected_check_statuses:
@@ -1169,6 +1244,7 @@ if st.session_state.report_df is not None:
                     "client_labels": selected_labels,
                     "lookback_days": (to_date - from_date).days,
                     "check_names": selected_check_names,
+                    "process_names": selected_process_names,
                     "case_statuses": selected_case_statuses,
                     "check_statuses": selected_check_statuses,
                     "check_severities": selected_check_severities,

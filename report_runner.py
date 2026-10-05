@@ -19,6 +19,7 @@ from queries import (
     CHECK_SEVERITY_FILTER_CLAUSE,
     CHECK_STATUS_FILTER_CLAUSE,
     CLIENT_FILTER_CLAUSE,
+    PROCESS_NAME_FILTER_CLAUSE,
 )
 
 
@@ -77,6 +78,7 @@ def run_tracker_query(cfg: dict) -> tuple[pd.DataFrame, dict, list[int]]:
     recent window."""
     client_ids = cfg.get("client_ids") or []
     check_names = cfg.get("check_names") or []
+    process_names = cfg.get("process_names") or []
     case_statuses = cfg.get("case_statuses") or []
     check_statuses = cfg.get("check_statuses") or []
     check_severities = cfg.get("check_severities") or []
@@ -86,6 +88,7 @@ def run_tracker_query(cfg: dict) -> tuple[pd.DataFrame, dict, list[int]]:
     query = CASE_REPORT_QUERY.format(
         client_filter_clause=CLIENT_FILTER_CLAUSE if client_ids else "",
         check_name_filter_clause=CHECK_NAME_FILTER_CLAUSE if check_names else "",
+        process_name_filter_clause=PROCESS_NAME_FILTER_CLAUSE if process_names else "",
         case_status_filter_clause=CASE_STATUS_FILTER_CLAUSE if case_statuses else "",
         check_status_filter_clause=CHECK_STATUS_FILTER_CLAUSE if check_statuses else "",
         check_severity_filter_clause=CHECK_SEVERITY_FILTER_CLAUSE if check_severities else "",
@@ -95,6 +98,8 @@ def run_tracker_query(cfg: dict) -> tuple[pd.DataFrame, dict, list[int]]:
         params["client_ids"] = client_ids
     if check_names:
         params["check_names"] = check_names
+    if process_names:
+        params["process_names"] = process_names
     if case_statuses:
         params["case_statuses"] = case_statuses
     if check_statuses:

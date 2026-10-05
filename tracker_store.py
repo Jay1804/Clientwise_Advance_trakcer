@@ -29,6 +29,7 @@ _JSON_LIST_COLUMNS = (
     "client_ids",
     "client_labels",
     "check_names",
+    "process_names",
     "case_statuses",
     "check_statuses",
     "check_severities",
@@ -50,6 +51,7 @@ _ALL_COLUMNS = (
     "client_labels",
     "lookback_days",
     "check_names",
+    "process_names",
     "case_statuses",
     "check_statuses",
     "check_severities",
@@ -71,6 +73,7 @@ _ALL_COLUMNS = (
 # existing trackers.db rather than requiring a fresh DB, so trackers saved
 # before this feature existed aren't lost.
 _MIGRATION_COLUMNS = {
+    "process_names": "TEXT NOT NULL DEFAULT '[]'",
     "to_address": "TEXT NOT NULL DEFAULT ''",
     "cc_address": "TEXT NOT NULL DEFAULT ''",
     "schedule_frequency": "TEXT NOT NULL DEFAULT ''",
@@ -103,6 +106,7 @@ def init_db() -> None:
                 client_labels TEXT NOT NULL DEFAULT '[]',
                 lookback_days INTEGER NOT NULL DEFAULT 30,
                 check_names TEXT NOT NULL DEFAULT '[]',
+                process_names TEXT NOT NULL DEFAULT '[]',
                 case_statuses TEXT NOT NULL DEFAULT '[]',
                 check_statuses TEXT NOT NULL DEFAULT '[]',
                 check_severities TEXT NOT NULL DEFAULT '[]',
