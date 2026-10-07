@@ -30,6 +30,7 @@ _JSON_LIST_COLUMNS = (
     "client_labels",
     "check_names",
     "process_names",
+    "case_ars_nos",
     "case_statuses",
     "check_statuses",
     "check_severities",
@@ -52,6 +53,7 @@ _ALL_COLUMNS = (
     "lookback_days",
     "check_names",
     "process_names",
+    "case_ars_nos",
     "case_statuses",
     "check_statuses",
     "check_severities",
@@ -74,6 +76,7 @@ _ALL_COLUMNS = (
 # before this feature existed aren't lost.
 _MIGRATION_COLUMNS = {
     "process_names": "TEXT NOT NULL DEFAULT '[]'",
+    "case_ars_nos": "TEXT NOT NULL DEFAULT '[]'",
     "to_address": "TEXT NOT NULL DEFAULT ''",
     "cc_address": "TEXT NOT NULL DEFAULT ''",
     "schedule_frequency": "TEXT NOT NULL DEFAULT ''",
@@ -107,6 +110,7 @@ def init_db() -> None:
                 lookback_days INTEGER NOT NULL DEFAULT 30,
                 check_names TEXT NOT NULL DEFAULT '[]',
                 process_names TEXT NOT NULL DEFAULT '[]',
+                case_ars_nos TEXT NOT NULL DEFAULT '[]',
                 case_statuses TEXT NOT NULL DEFAULT '[]',
                 check_statuses TEXT NOT NULL DEFAULT '[]',
                 check_severities TEXT NOT NULL DEFAULT '[]',

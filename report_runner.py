@@ -14,6 +14,7 @@ from flex_fields import load_flex_field_map
 from queries import (
     ANTECEDENT_DATA_QUERY,
     CASE_REPORT_QUERY,
+    CASE_ARS_FILTER_CLAUSE,
     CASE_STATUS_FILTER_CLAUSE,
     CHECK_NAME_FILTER_CLAUSE,
     CHECK_SEVERITY_FILTER_CLAUSE,
@@ -21,6 +22,23 @@ from queries import (
     CLIENT_FILTER_CLAUSE,
     PROCESS_NAME_FILTER_CLAUSE,
 )
+
+
+ARS_CHUNK_SIZE = 5000
+
+
+def run_report_query(query: str, params: dict) -> pd.DataFrame:
+    """run_query_params, but a very long case_ars_nos list is split into chunks
+    of ARS_CHUNK_SIZE (one query each, results concatenated) so a huge IN (...)
+    never exceeds the MySQL packet size or makes one giant slow query."""
+    ars = params.get("case_ars_nos") or []
+    if len(ars) <= ARS_CHUNK_SIZE:
+        return run_query_params(query, params)
+    frames = [
+        run_query_params(query, {**params, "case_ars_nos": ars[i : i + ARS_CHUNK_SIZE]})
+        for i in range(0, len(ars), ARS_CHUNK_SIZE)
+    ]
+    return pd.concat(frames, ignore_index=True)
 
 
 def fetch_antecedent_columns(case_check_ids: list, field_names: list[str], data_column: str) -> pd.DataFrame:
@@ -79,6 +97,7 @@ def run_tracker_query(cfg: dict) -> tuple[pd.DataFrame, dict, list[int]]:
     client_ids = cfg.get("client_ids") or []
     check_names = cfg.get("check_names") or []
     process_names = cfg.get("process_names") or []
+    case_ars_nos = cfg.get("case_ars_nos") or []
     case_statuses = cfg.get("case_statuses") or []
     check_statuses = cfg.get("check_statuses") or []
     check_severities = cfg.get("check_severities") or []
@@ -89,6 +108,7 @@ def run_tracker_query(cfg: dict) -> tuple[pd.DataFrame, dict, list[int]]:
         client_filter_clause=CLIENT_FILTER_CLAUSE if client_ids else "",
         check_name_filter_clause=CHECK_NAME_FILTER_CLAUSE if check_names else "",
         process_name_filter_clause=PROCESS_NAME_FILTER_CLAUSE if process_names else "",
+        case_ars_filter_clause=CASE_ARS_FILTER_CLAUSE if case_ars_nos else "",
         case_status_filter_clause=CASE_STATUS_FILTER_CLAUSE if case_statuses else "",
         check_status_filter_clause=CHECK_STATUS_FILTER_CLAUSE if check_statuses else "",
         check_severity_filter_clause=CHECK_SEVERITY_FILTER_CLAUSE if check_severities else "",
@@ -100,6 +120,8 @@ def run_tracker_query(cfg: dict) -> tuple[pd.DataFrame, dict, list[int]]:
         params["check_names"] = check_names
     if process_names:
         params["process_names"] = process_names
+    if case_ars_nos:
+        params["case_ars_nos"] = case_ars_nos
     if case_statuses:
         params["case_statuses"] = case_statuses
     if check_statuses:
@@ -107,7 +129,7 @@ def run_tracker_query(cfg: dict) -> tuple[pd.DataFrame, dict, list[int]]:
     if check_severities:
         params["check_severities"] = check_severities
 
-    df = run_query_params(query, params)
+    df = run_report_query(query, params)
     df = merge_antecedent_fields_into(df, cfg.get("antecedent_fields") or [])
 
     distinct_client_ids = [

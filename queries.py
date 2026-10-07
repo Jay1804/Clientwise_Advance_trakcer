@@ -243,6 +243,7 @@ AND received_date BETWEEN :from_date AND :to_date
 {client_filter_clause}
 {check_name_filter_clause}
 {process_name_filter_clause}
+{case_ars_filter_clause}
 {case_status_filter_clause}
 {check_status_filter_clause}
 {check_severity_filter_clause}
@@ -300,6 +301,7 @@ CHECK_NAME_FILTER_CLAUSE = "AND ec.check_name IN :check_names"
 # list uses for Case_status/check_status, so filter values line up with what
 # the report actually displays for those columns rather than raw DB codes.
 PROCESS_NAME_FILTER_CLAUSE = "AND ecp.process_name IN :process_names"
+CASE_ARS_FILTER_CLAUSE = "AND ecm.case_ars_no IN :case_ars_nos"
 CASE_STATUS_FILTER_CLAUSE = "AND checkpoint_live.fn_case_status(case_status) IN :case_statuses"
 CHECK_STATUS_FILTER_CLAUSE = "AND checkpoint_live.fn_check_status(check_status) IN :check_statuses"
 CHECK_SEVERITY_FILTER_CLAUSE = "AND check_severity IN :check_severities"

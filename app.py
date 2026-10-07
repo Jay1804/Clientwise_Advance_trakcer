@@ -28,6 +28,7 @@ from queries import (
     CLIENT_LOOKUP_QUERY,
     FIELD_NAME_LOOKUP_QUERY,
     PROCESS_NAME_FILTER_CLAUSE,
+    CASE_ARS_FILTER_CLAUSE,
     PROCESS_NAME_LOOKUP_QUERY,
 )
 from email_sender import email_available, send_email
@@ -42,7 +43,7 @@ from report_excel import (
     build_split_report_zip,
     sanitize_filename,
 )
-from report_runner import fetch_antecedent_columns, run_tracker_query
+from report_runner import fetch_antecedent_columns, run_report_query, run_tracker_query
 import tracker_store as trackers
 
 load_dotenv()
@@ -94,6 +95,31 @@ def read_client_ids_file(uploaded) -> list[int]:
     if col is None:
         raise ValueError('No "Client External ID" column found in the uploaded file.')
     return parse_client_ids_text(",".join(df[col].dropna().astype(str)))
+
+
+MAX_CASE_ARS = 500_000
+PREVIEW_MAX_ROWS = 1000
+
+
+def parse_case_ars_text(text: str) -> list[str]:
+    """Case ARS numbers separated by commas/whitespace/semicolons, optionally
+    quoted ('5269-085648', ...) -> strings (order kept, deduped)."""
+    out: list[str] = []
+    for token in re.split(r"[,\s;]+", text or ""):
+        token = token.strip().strip("'\"`[](){}")
+        if token and token not in out:
+            out.append(token)
+    return out
+
+
+def read_case_ars_file(uploaded) -> list[str]:
+    """Case ARS numbers from the 'case_ars_no' column of a CSV/XLS(X) upload."""
+    name = uploaded.name.lower()
+    df = pd.read_csv(uploaded, dtype=str) if name.endswith(".csv") else pd.read_excel(uploaded, dtype=str)
+    col = next((c for c in df.columns if str(c).strip().lower() == "case_ars_no"), None)
+    if col is None:
+        raise ValueError('No "case_ars_no" column found in the uploaded file.')
+    return [v for v in (s.strip() for s in df[col].dropna().astype(str)) if v]
 
 
 @st.cache_data(ttl=3600)
@@ -636,6 +662,8 @@ if st.session_state.pending_tracker_load is not None:
         n for n in (_cfg.get("process_names") or []) if n in _valid_process_names
     ]
 
+    st.session_state["flt_case_ars_text"] = "\n".join(_cfg.get("case_ars_nos") or [])
+
     _valid_case_statuses = set(get_case_status_lookup()["case_status"].dropna().tolist())
     st.session_state["flt_case_statuses"] = [
         s for s in (_cfg.get("case_statuses") or []) if s in _valid_case_statuses
@@ -759,6 +787,35 @@ selected_process_names = st.multiselect(
     key="flt_process_names",
 )
 
+col_ars_text, col_ars_file = st.columns(2)
+with col_ars_text:
+    case_ars_text = st.text_area(
+        "Case ARS Number(s), comma-separated (leave empty for all)",
+        placeholder="'5269-085648',\n'5269-087586',\n'5269-087815'",
+        height=100,
+        key="flt_case_ars_text",
+    )
+with col_ars_file:
+    case_ars_file = st.file_uploader(
+        'Or upload a CSV / Excel file with a "case_ars_no" column',
+        type=["csv", "xls", "xlsx"],
+        key="flt_case_ars_file",
+    )
+selected_case_ars = parse_case_ars_text(case_ars_text)
+if case_ars_file is not None:
+    try:
+        selected_case_ars += read_case_ars_file(case_ars_file)
+    except Exception as exc:
+        st.error(f"Could not read case ARS numbers from file: {exc}")
+selected_case_ars = list(dict.fromkeys(selected_case_ars))
+_ars_too_many = len(selected_case_ars) > MAX_CASE_ARS
+st.caption(
+    f"Maximum {MAX_CASE_ARS:,} Case ARS numbers per fetch (text box and file combined). "
+    f"Currently: {len(selected_case_ars):,}."
+)
+if _ars_too_many:
+    st.error(f"Too many Case ARS numbers ({len(selected_case_ars):,}); remove some to stay within {MAX_CASE_ARS:,}.")
+
 case_status_lookup = get_case_status_lookup()
 check_status_lookup = get_check_status_lookup()
 
@@ -821,7 +878,7 @@ elif not selected_client_ids and (to_date - from_date).days > LARGE_RANGE_NO_FIL
         "date range or picking specific clients."
     )
 
-fetch_disabled = from_date > to_date
+fetch_disabled = from_date > to_date or _ars_too_many
 
 if st.button("📥 Fetch Report", disabled=fetch_disabled, use_container_width=True):
     with st.spinner("Running query against the database..."):
@@ -836,6 +893,7 @@ if st.button("📥 Fetch Report", disabled=fetch_disabled, use_container_width=T
                 client_filter_clause=client_filter_clause,
                 check_name_filter_clause=check_name_filter_clause,
                 process_name_filter_clause=process_name_filter_clause,
+                case_ars_filter_clause=CASE_ARS_FILTER_CLAUSE if selected_case_ars else "",
                 case_status_filter_clause=case_status_filter_clause,
                 check_status_filter_clause=check_status_filter_clause,
                 check_severity_filter_clause=check_severity_filter_clause,
@@ -847,6 +905,8 @@ if st.button("📥 Fetch Report", disabled=fetch_disabled, use_container_width=T
                 params["check_names"] = selected_check_names
             if selected_process_names:
                 params["process_names"] = selected_process_names
+            if selected_case_ars:
+                params["case_ars_nos"] = selected_case_ars
             if selected_case_statuses:
                 params["case_statuses"] = selected_case_statuses
             if selected_check_statuses:
@@ -854,7 +914,7 @@ if st.button("📥 Fetch Report", disabled=fetch_disabled, use_container_width=T
             if selected_check_severities:
                 params["check_severities"] = selected_check_severities
 
-            df = run_query_params(query, params)
+            df = run_report_query(query, params)
 
             distinct_client_ids = [
                 int(cid) for cid in df["client_external_id"].dropna().unique().tolist()
@@ -1082,8 +1142,11 @@ if st.session_state.report_df is not None:
     st.subheader("Report Preview")
     preview_columns = selected_columns or list(df.columns)
     preview_df = aggregate_selected_columns(df[preview_columns])
+    _total_preview_rows = len(preview_df)
+    preview_df = preview_df.head(PREVIEW_MAX_ROWS)
     st.caption(
-        f"{len(preview_df)} rows x {len(preview_df.columns)} columns shown "
+        f"{_total_preview_rows:,} rows x {len(preview_df.columns)} columns "
+        f"(showing first {len(preview_df):,}; downloads contain all rows) - "
         "(reflects your current column selection/order, aggregated to that level "
         "of detail; raw column names shown below - the split-by-client download "
         "aggregates within each client's sheet separately)"
@@ -1245,6 +1308,7 @@ if st.session_state.report_df is not None:
                     "lookback_days": (to_date - from_date).days,
                     "check_names": selected_check_names,
                     "process_names": selected_process_names,
+                    "case_ars_nos": selected_case_ars,
                     "case_statuses": selected_case_statuses,
                     "check_statuses": selected_check_statuses,
                     "check_severities": selected_check_severities,

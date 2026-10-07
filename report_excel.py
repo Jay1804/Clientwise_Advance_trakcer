@@ -14,6 +14,7 @@ import zipfile
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.cell import WriteOnlyCell
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -76,37 +77,55 @@ def sanitize_filename(name: str, used: set[str], max_len: int, fallback: str = "
     return name
 
 
+# Excel hard-caps a sheet at 1,048,576 rows (header included); bigger reports
+# continue on "<name> (2)", "<name> (3)", ... sheets of the same workbook.
+MAX_SHEET_DATA_ROWS = 1_048_575
+_WIDTH_SAMPLE_ROWS = 2000
+
+
 def _write_sheet(wb: Workbook, sheet_name: str, df: pd.DataFrame) -> None:
-    ws: Worksheet = wb.create_sheet(title=sheet_name)
-    ws.append(list(df.columns))
-
-    for row in df.itertuples(index=False):
-        ws.append(["" if pd.isna(v) else v for v in row])
-
+    """Write df into a write-only workbook (rows streamed to disk, so memory
+    stays flat even for lakhs of rows), splitting across sheets past Excel's
+    row limit. Column widths are sized from the first rows only."""
     n_cols = len(df.columns)
-    for col in range(1, n_cols + 1):
-        header_cell = ws.cell(row=1, column=col)
-        header_cell.fill = HEADER_FILL
-        header_cell.font = HEADER_FONT
-        header_cell.alignment = HEADER_ALIGNMENT
-
-        header_len = len(str(header_cell.value or ""))
+    sample = df.head(_WIDTH_SAMPLE_ROWS)
+    widths = []
+    for col in range(n_cols):
+        header_len = len(str(df.columns[col]))
         try:
-            max_data_len = df.iloc[:, col - 1].astype(str).map(len).max()
+            max_data_len = sample.iloc[:, col].astype(str).map(len).max()
         except (ValueError, IndexError):
             max_data_len = 0
-        width = max(MIN_COL_WIDTH, min(MAX_COL_WIDTH, max(header_len, max_data_len) + 2))
-        ws.column_dimensions[get_column_letter(col)].width = width
+        if pd.isna(max_data_len):
+            max_data_len = 0
+        widths.append(max(MIN_COL_WIDTH, min(MAX_COL_WIDTH, max(header_len, max_data_len) + 2)))
 
-    ws.freeze_panes = "A2"
-    if ws.max_row >= 1 and n_cols >= 1:
-        ws.auto_filter.ref = f"A1:{get_column_letter(n_cols)}{ws.max_row}"
-    ws.row_dimensions[1].height = 30
+    n_sheets = max(1, -(-len(df) // MAX_SHEET_DATA_ROWS))
+    for part in range(n_sheets):
+        title = sheet_name if part == 0 else f"{sheet_name} ({part + 1})"
+        ws = wb.create_sheet(title=title)
+        for i, width in enumerate(widths, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = width
+        ws.freeze_panes = "A2"
+
+        header = []
+        for name in df.columns:
+            cell = WriteOnlyCell(ws, value=name)
+            cell.fill = HEADER_FILL
+            cell.font = HEADER_FONT
+            cell.alignment = HEADER_ALIGNMENT
+            header.append(cell)
+        ws.append(header)
+
+        chunk = df.iloc[part * MAX_SHEET_DATA_ROWS : (part + 1) * MAX_SHEET_DATA_ROWS]
+        for row in chunk.itertuples(index=False):
+            ws.append(["" if pd.isna(v) else v for v in row])
+        if n_cols >= 1:
+            ws.auto_filter.ref = f"A1:{get_column_letter(n_cols)}{len(chunk) + 1}"
 
 
 def _single_sheet_workbook_bytes(sheet_name: str, df: pd.DataFrame) -> bytes:
-    wb = Workbook()
-    wb.remove(wb.active)
+    wb = Workbook(write_only=True)
     _write_sheet(wb, sheet_name, df)
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -144,8 +163,7 @@ def build_report_excel(df: pd.DataFrame, columns: list[str] | None = None) -> by
         df = df[[c for c in columns if c in df.columns]]
 
     if df.empty:
-        wb = Workbook()
-        wb.remove(wb.active)
+        wb = Workbook(write_only=True)
         ws = wb.create_sheet(title="Report")
         ws.append(["No rows matched the selected filters."])
         buffer = io.BytesIO()
