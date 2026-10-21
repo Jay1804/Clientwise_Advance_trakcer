@@ -280,6 +280,7 @@ CASE_LEVEL_COLUMNS = frozenset({
     "First_interim_sent_Date", "First_interim_sent_Date_Sevirity",
     "Last_Final_Report_Sent_Date", "Last_Final_Report_Severity",
     "Last_Additional_Report_Sent_Date", "Last_Additional_Report_Severity",
+    "Latest_Report_Sent_Date", "Latest_Report_Severity",
     "dqc_released_date", "DS Name", "EDC Prioritized Requested Date",
     "EDC Prioritized Revised Date", "contact_value", "MOBILE_NO", "EMAIL_ADDRESS",
 })

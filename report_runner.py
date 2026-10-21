@@ -27,18 +27,42 @@ from queries import (
 ARS_CHUNK_SIZE = 5000
 
 
+def add_latest_report_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Add Latest_Report_Sent_Date / Latest_Report_Severity: the most advanced
+    report type sent for the case - Additional if any was sent, else Final,
+    else Interim (blank if none). Each pair comes from the already-selected
+    Last_*_Report_* columns, so no extra SQL is needed."""
+    needed = [
+        f"Last_{kind}_Report_{field}"
+        for kind in ("Additional", "Final", "Inerim")
+        for field in ("Sent_Date", "Severity")
+    ]
+    if any(c not in df.columns for c in needed):
+        return df
+    df = df.copy()
+    for field, new_name in (("Sent_Date", "Latest_Report_Sent_Date"), ("Severity", "Latest_Report_Severity")):
+        latest = (
+            df[f"Last_Additional_Report_{field}"]
+            .combine_first(df[f"Last_Final_Report_{field}"])
+            .combine_first(df[f"Last_Inerim_Report_{field}"])
+        )
+        pos = df.columns.get_loc("Last_Additional_Report_Severity") + 1
+        df.insert(min(pos + (1 if field == "Severity" else 0), len(df.columns)), new_name, latest)
+    return df
+
+
 def run_report_query(query: str, params: dict) -> pd.DataFrame:
     """run_query_params, but a very long case_ars_nos list is split into chunks
     of ARS_CHUNK_SIZE (one query each, results concatenated) so a huge IN (...)
     never exceeds the MySQL packet size or makes one giant slow query."""
     ars = params.get("case_ars_nos") or []
     if len(ars) <= ARS_CHUNK_SIZE:
-        return run_query_params(query, params)
+        return add_latest_report_columns(run_query_params(query, params))
     frames = [
         run_query_params(query, {**params, "case_ars_nos": ars[i : i + ARS_CHUNK_SIZE]})
         for i in range(0, len(ars), ARS_CHUNK_SIZE)
     ]
-    return pd.concat(frames, ignore_index=True)
+    return add_latest_report_columns(pd.concat(frames, ignore_index=True))
 
 
 def fetch_antecedent_columns(case_check_ids: list, field_names: list[str], data_column: str) -> pd.DataFrame:
