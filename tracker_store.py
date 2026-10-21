@@ -37,7 +37,7 @@ _JSON_LIST_COLUMNS = (
     "antecedent_fields",
     "schedule_days",
 )
-_JSON_COLUMNS = _JSON_LIST_COLUMNS + ("selected_columns",)
+_JSON_COLUMNS = _JSON_LIST_COLUMNS + ("selected_columns", "column_renames")
 
 # Frequency values the UI/scheduler understand. "" means "no schedule - manual
 # send only". schedule_days only applies to "Weekly"; the two "Daily (...)"
@@ -58,6 +58,7 @@ _ALL_COLUMNS = (
     "check_statuses",
     "check_severities",
     "selected_columns",
+    "column_renames",
     "antecedent_fields",
     "to_address",
     "cc_address",
@@ -75,6 +76,7 @@ _ALL_COLUMNS = (
 # existing trackers.db rather than requiring a fresh DB, so trackers saved
 # before this feature existed aren't lost.
 _MIGRATION_COLUMNS = {
+    "column_renames": "TEXT",
     "process_names": "TEXT NOT NULL DEFAULT '[]'",
     "case_ars_nos": "TEXT NOT NULL DEFAULT '[]'",
     "to_address": "TEXT NOT NULL DEFAULT ''",
@@ -115,6 +117,7 @@ def init_db() -> None:
                 check_statuses TEXT NOT NULL DEFAULT '[]',
                 check_severities TEXT NOT NULL DEFAULT '[]',
                 selected_columns TEXT,
+                column_renames TEXT,
                 antecedent_fields TEXT NOT NULL DEFAULT '[]',
                 to_address TEXT NOT NULL DEFAULT '',
                 cc_address TEXT NOT NULL DEFAULT '',
@@ -148,7 +151,14 @@ def _decode_row(row: sqlite3.Row) -> dict:
     d = dict(row)
     for col in _JSON_COLUMNS:
         raw = d.get(col)
-        d[col] = json.loads(raw) if raw else ([] if col != "selected_columns" else None)
+        if raw:
+            d[col] = json.loads(raw)
+        elif col == "selected_columns":
+            d[col] = None
+        elif col == "column_renames":
+            d[col] = {}
+        else:
+            d[col] = []
     return d
 
 
@@ -170,6 +180,7 @@ def save_tracker(config: dict, tracker_id: int | None = None) -> int:
     for col in _JSON_LIST_COLUMNS:
         row[col] = json.dumps(config.get(col) or [])
     row["selected_columns"] = json.dumps(config.get("selected_columns"))
+    row["column_renames"] = json.dumps(config.get("column_renames") or {})
 
     with _connect() as conn:
         if tracker_id is None:

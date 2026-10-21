@@ -132,14 +132,32 @@ def _single_sheet_workbook_bytes(sheet_name: str, df: pd.DataFrame) -> bytes:
     return buffer.getvalue()
 
 
+def apply_column_renames(df: pd.DataFrame, renames: dict | None) -> pd.DataFrame:
+    """Rename output headers per the user's {raw_name: new_name} choices.
+    Blank/unchanged entries are ignored. Applied after aggregation so
+    de-duplication always works on the raw column names."""
+    if not renames:
+        return df
+    effective = {k: v.strip() for k, v in renames.items() if k in df.columns and v and v.strip() and v.strip() != k}
+    return df.rename(columns=effective) if effective else df
+
+
 def _prepare_client_sheet(
-    client_df: pd.DataFrame, client_external_id, flex_map: dict, columns: list[str] | None = None
+    client_df: pd.DataFrame,
+    client_external_id,
+    flex_map: dict,
+    columns: list[str] | None = None,
+    renames: dict | None = None,
 ) -> pd.DataFrame:
     if columns is not None:
         client_df = client_df[[c for c in columns if c in client_df.columns]]
 
     rename = flex_column_rename_map(client_external_id, flex_map)
     client_df = client_df.rename(columns=rename)
+    # The user's own header names win over the per-client flex names.
+    user_renames = {
+        rename.get(k, k): v for k, v in (renames or {}).items()
+    }
 
     # Drop flex columns that fell back to a generic "Flex Field n" name AND
     # are empty for every row in this client's data - nothing to show.
@@ -148,10 +166,12 @@ def _prepare_client_sheet(
         if col in client_df.columns and client_df[col].map(lambda v: pd.isna(v) or str(v).strip() == "").all():
             client_df = client_df.drop(columns=[col])
 
-    return aggregate_selected_columns(client_df)
+    return apply_column_renames(aggregate_selected_columns(client_df), user_renames)
 
 
-def build_report_excel(df: pd.DataFrame, columns: list[str] | None = None) -> bytes:
+def build_report_excel(
+    df: pd.DataFrame, columns: list[str] | None = None, renames: dict | None = None
+) -> bytes:
     """Single consolidated workbook, one sheet, raw column names.
 
     `columns`, if given, selects and orders which columns are written -
@@ -170,10 +190,14 @@ def build_report_excel(df: pd.DataFrame, columns: list[str] | None = None) -> by
         wb.save(buffer)
         return buffer.getvalue()
 
-    return _single_sheet_workbook_bytes("Report", aggregate_selected_columns(df))
+    return _single_sheet_workbook_bytes(
+        "Report", apply_column_renames(aggregate_selected_columns(df), renames)
+    )
 
 
-def build_split_report_zip(df: pd.DataFrame, flex_map: dict, columns: list[str] | None = None) -> bytes:
+def build_split_report_zip(
+    df: pd.DataFrame, flex_map: dict, columns: list[str] | None = None, renames: dict | None = None
+) -> bytes:
     """Zip of one .xlsx per client (by Company_name), each with that
     client's own CASE_FLEX_FIELD1-30 names applied via flex_map.
 
@@ -189,7 +213,9 @@ def build_split_report_zip(df: pd.DataFrame, flex_map: dict, columns: list[str] 
             used_names: set[str] = set()
             group_cols = ["client_external_id", "Company_name"]
             for (client_external_id, company_name), client_df in df.groupby(group_cols, dropna=False, sort=True):
-                sheet_df = _prepare_client_sheet(client_df, client_external_id, flex_map, columns=columns)
+                sheet_df = _prepare_client_sheet(
+                    client_df, client_external_id, flex_map, columns=columns, renames=renames
+                )
                 file_bytes = _single_sheet_workbook_bytes("Report", sheet_df)
                 file_name = sanitize_filename(company_name, used_names, max_len=150) + ".xlsx"
                 zf.writestr(file_name, file_bytes)
@@ -198,7 +224,7 @@ def build_split_report_zip(df: pd.DataFrame, flex_map: dict, columns: list[str] 
 
 
 def build_group_split_zip(
-    df: pd.DataFrame, group_column: str, columns: list[str] | None = None
+    df: pd.DataFrame, group_column: str, columns: list[str] | None = None, renames: dict | None = None
 ) -> bytes:
     """Zip of one .xlsx per distinct value of `group_column` (e.g. Process_name,
     location, a Case Flex Field, or an added antecedent field) - the same
@@ -226,7 +252,7 @@ def build_group_split_zip(
             used_names: set[str] = set()
             for group_value, group_df in df.groupby(group_column, dropna=False, sort=True):
                 sheet_df = group_df[[c for c in columns if c in group_df.columns]] if columns is not None else group_df
-                sheet_df = aggregate_selected_columns(sheet_df)
+                sheet_df = apply_column_renames(aggregate_selected_columns(sheet_df), renames)
                 file_bytes = _single_sheet_workbook_bytes("Report", sheet_df)
                 file_name = sanitize_filename(group_value, used_names, max_len=150, fallback="(Blank)") + ".xlsx"
                 zf.writestr(file_name, file_bytes)
@@ -235,7 +261,7 @@ def build_group_split_zip(
 
 
 def build_single_group_excel(
-    df: pd.DataFrame, group_column: str, group_value, columns: list[str] | None = None
+    df: pd.DataFrame, group_column: str, group_value, columns: list[str] | None = None, renames: dict | None = None
 ) -> bytes:
     """The single-group counterpart to build_group_split_zip: just the one
     workbook for `group_value`, used when emailing one split file at a time
@@ -247,7 +273,9 @@ def build_single_group_excel(
     group_df = df[mask]
     if columns is not None:
         group_df = group_df[[c for c in columns if c in group_df.columns]]
-    return _single_sheet_workbook_bytes("Report", aggregate_selected_columns(group_df))
+    return _single_sheet_workbook_bytes(
+        "Report", apply_column_renames(aggregate_selected_columns(group_df), renames)
+    )
 
 
 def build_mapping_template_excel(dimension_label: str, values: list) -> bytes:

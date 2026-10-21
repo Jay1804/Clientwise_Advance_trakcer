@@ -36,6 +36,7 @@ from report_excel import (
     MAX_SPLIT_GROUPS,
     TooManySplitGroupsError,
     aggregate_selected_columns,
+    apply_column_renames,
     build_group_split_zip,
     build_mapping_template_excel,
     build_report_excel,
@@ -227,6 +228,10 @@ if "report_zip_bytes" not in st.session_state:
     st.session_state.report_zip_bytes = None
 if "flex_map" not in st.session_state:
     st.session_state.flex_map = {}
+if "column_renames" not in st.session_state:
+    st.session_state.column_renames = {}
+if "applied_renames" not in st.session_state:
+    st.session_state.applied_renames = {}
 if "selected_columns" not in st.session_state:
     st.session_state.selected_columns = None
 if "available_columns" not in st.session_state:
@@ -255,7 +260,11 @@ def _merge_column_lists(columns: list[str]) -> tuple[list[str], list[str]]:
 
 
 def _rebuild_exports(df: pd.DataFrame, columns: list[str], flex_map: dict) -> tuple[bytes, bytes]:
-    return build_report_excel(df, columns=columns), build_split_report_zip(df, flex_map, columns=columns)
+    renames = st.session_state.column_renames
+    return (
+        build_report_excel(df, columns=columns, renames=renames),
+        build_split_report_zip(df, flex_map, columns=columns, renames=renames),
+    )
 
 
 def _parse_mapping_file(uploaded_file, dimension_label: str) -> pd.DataFrame:
@@ -300,7 +309,9 @@ def _render_group_split_download(
         if st.button(f"🔀 Generate split by {label}", key=f"gen_{session_key}", use_container_width=True):
             try:
                 with st.spinner(f"Building split-by-{label} report..."):
-                    st.session_state[session_key] = build_group_split_zip(df, group_column, columns=columns)
+                    st.session_state[session_key] = build_group_split_zip(
+                        df, group_column, columns=columns, renames=st.session_state.column_renames
+                    )
             except TooManySplitGroupsError as exc:
                 st.session_state[session_key] = None
                 st.error(str(exc))
@@ -400,7 +411,9 @@ def _render_group_split_download(
                     continue
                 try:
                     actual_value = value_by_str[display_value]
-                    attachment_bytes = build_single_group_excel(df, group_column, actual_value, columns=columns)
+                    attachment_bytes = build_single_group_excel(
+                        df, group_column, actual_value, columns=columns, renames=st.session_state.column_renames
+                    )
                     file_name = sanitize_filename(display_value, set(), max_len=150, fallback="Report") + ".xlsx"
                     subject = subject_template.replace("{value}", display_value)
                     body = body_template.replace("{value}", display_value)
@@ -522,7 +535,7 @@ def render_saved_trackers_view() -> None:
                     cfg = trackers.get_tracker(tracker_id)
                     fresh_df, _, _ = run_tracker_query(cfg)
                     st.session_state[f"tracker_dl_bytes_{tracker_id}"] = build_report_excel(
-                        fresh_df, columns=cfg.get("selected_columns")
+                        fresh_df, columns=cfg.get("selected_columns"), renames=cfg.get("column_renames")
                     )
                 st.rerun()
 
@@ -592,7 +605,9 @@ def render_saved_trackers_view() -> None:
                                 with st.spinner(f"Running '{row['tracker_name']}' fresh and sending..."):
                                     cfg = trackers.get_tracker(tracker_id)
                                     fresh_df, _, _ = run_tracker_query(cfg)
-                                    file_bytes = build_report_excel(fresh_df, columns=cfg.get("selected_columns"))
+                                    file_bytes = build_report_excel(
+                                        fresh_df, columns=cfg.get("selected_columns"), renames=cfg.get("column_renames")
+                                    )
                                     file_name = (
                                         f"{sanitize_filename(row['tracker_name'], set(), 100)}_"
                                         f"{date.today().strftime('%Y%m%d')}.xlsx"
@@ -679,6 +694,8 @@ if st.session_state.pending_tracker_load is not None:
     st.session_state["flt_to_date"] = date.today()
     st.session_state.loaded_tracker_id = _cfg.get("tracker_id")
     st.session_state.loaded_tracker_columns = _cfg.get("selected_columns")
+    st.session_state.column_renames = dict(_cfg.get("column_renames") or {})
+    st.session_state.applied_renames = dict(st.session_state.column_renames)
     st.session_state.loaded_tracker_name = _cfg.get("tracker_name", "")
     st.session_state.loaded_tracker_description = _cfg.get("tracker_description", "")
     st.session_state.loaded_tracker_to_address = _cfg.get("to_address", "")
@@ -931,6 +948,7 @@ if st.button("📥 Fetch Report", disabled=fetch_disabled, use_container_width=T
             st.session_state.flex_map = flex_map
             st.session_state.distinct_client_ids = distinct_client_ids
             st.session_state.applied_columns = tuple(selected_columns)
+            st.session_state.applied_renames = dict(st.session_state.column_renames)
             st.session_state.report_excel_bytes = excel_bytes
             st.session_state.report_zip_bytes = zip_bytes
             st.session_state.antecedent_columns = []
@@ -1120,14 +1138,57 @@ if st.session_state.report_df is not None:
     total_columns = len(selected_columns) + len(st.session_state.available_columns)
     st.caption(f"{len(selected_columns)} of {total_columns} columns selected.")
 
+    rename_error = None
+    with st.expander("✏️ Rename column headers (optional)", expanded=False):
+        st.caption(
+            "Type a new header for any column; leave a row blank to keep the database name. "
+            "Renames apply to every download and email, and are saved with a Tracker. "
+            "Click 'Apply column selection' below to refresh the downloads."
+        )
+        _rename_src = pd.DataFrame(
+            {
+                "Original name": selected_columns,
+                "New header": [st.session_state.column_renames.get(c, "") for c in selected_columns],
+            }
+        )
+        _edited = st.data_editor(
+            _rename_src,
+            disabled=["Original name"],
+            hide_index=True,
+            use_container_width=True,
+            key=f"rename_editor_{hash(tuple(selected_columns))}",
+        )
+        _new_renames = {
+            row["Original name"]: str(row["New header"]).strip()
+            for _, row in _edited.iterrows()
+            if pd.notna(row["New header"]) and str(row["New header"]).strip()
+            and str(row["New header"]).strip() != row["Original name"]
+        }
+        # Keep renames for hidden columns so they survive being re-shown.
+        st.session_state.column_renames = {
+            **{k: v for k, v in st.session_state.column_renames.items() if k not in selected_columns},
+            **_new_renames,
+        }
+        _final_headers = [st.session_state.column_renames.get(c, c) for c in selected_columns]
+        _dupes = sorted({h for h in _final_headers if _final_headers.count(h) > 1})
+        if _dupes:
+            rename_error = f"Duplicate headers: {', '.join(_dupes)}. Each column needs a unique name."
+            st.error(rename_error)
+        if st.button("Clear all renames", key="clear_renames"):
+            st.session_state.column_renames = {}
+            st.rerun()
+
     if not selected_columns:
         st.warning("Select at least one column before downloading.")
-    elif tuple(selected_columns) != st.session_state.applied_columns:
-        st.info("Column selection changed - click 'Apply column selection' below to refresh the downloads.")
+    elif (
+        tuple(selected_columns) != st.session_state.applied_columns
+        or st.session_state.column_renames != st.session_state.applied_renames
+    ):
+        st.info("Column selection or headers changed - click 'Apply column selection' below to refresh the downloads.")
 
     if st.button(
         "🔄 Apply column selection to downloads",
-        disabled=not selected_columns,
+        disabled=not selected_columns or bool(rename_error),
         use_container_width=True,
     ):
         with st.spinner("Rebuilding exports..."):
@@ -1135,20 +1196,21 @@ if st.session_state.report_df is not None:
             st.session_state.report_excel_bytes = excel_bytes
             st.session_state.report_zip_bytes = zip_bytes
             st.session_state.applied_columns = tuple(selected_columns)
+            st.session_state.applied_renames = dict(st.session_state.column_renames)
         st.rerun()
 
     st.divider()
 
     st.subheader("Report Preview")
     preview_columns = selected_columns or list(df.columns)
-    preview_df = aggregate_selected_columns(df[preview_columns])
+    preview_df = apply_column_renames(aggregate_selected_columns(df[preview_columns]), st.session_state.column_renames)
     _total_preview_rows = len(preview_df)
     preview_df = preview_df.head(PREVIEW_MAX_ROWS)
     st.caption(
         f"{_total_preview_rows:,} rows x {len(preview_df.columns)} columns "
         f"(showing first {len(preview_df):,}; downloads contain all rows) - "
         "(reflects your current column selection/order, aggregated to that level "
-        "of detail; raw column names shown below - the split-by-client download "
+        "of detail; renamed headers shown below - the split-by-client download "
         "aggregates within each client's sheet separately)"
     )
     st.dataframe(preview_df, use_container_width=True)
@@ -1313,6 +1375,7 @@ if st.session_state.report_df is not None:
                     "check_statuses": selected_check_statuses,
                     "check_severities": selected_check_severities,
                     "selected_columns": st.session_state.selected_columns,
+                    "column_renames": st.session_state.column_renames,
                     "antecedent_fields": [
                         {
                             "field_name": name,

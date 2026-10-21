@@ -88,7 +88,9 @@ def run_once() -> int:
         try:
             cfg = trackers.get_tracker(tracker_id)
             fresh_df, _, _ = run_tracker_query(cfg)
-            file_bytes = build_report_excel(fresh_df, columns=cfg.get("selected_columns"))
+            file_bytes = build_report_excel(
+                fresh_df, columns=cfg.get("selected_columns"), renames=cfg.get("column_renames")
+            )
             file_name = f"{row['tracker_name']}_{now:%Y%m%d}.xlsx"
             subject = f"Case Report - {row['tracker_name']} - {now:%Y-%m-%d}"
             body = f"Please find attached the scheduled '{row['tracker_name']}' report."
